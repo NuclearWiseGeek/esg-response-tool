@@ -52,7 +52,7 @@ def summarize(df):
     s3 = df[df["Scope"] == "Scope 3"]["Emissions_kgCO2e"].sum()
     return {"scope1": s1, "scope2": s2, "scope3": s3, "total": s1 + s2 + s3}
 
-# --- 2. THE PDF GENERATOR (Smart Evidence & Negative Assurance) ---
+# --- 2. THE PDF GENERATOR (Scope-Sorted Evidence) ---
 def build_pdf(company_name, country, year, revenue, currency, df, totals, evidence_files, signer_name):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, title=f"Carbon Footprint - {company_name}", topMargin=30, bottomMargin=40)
@@ -148,41 +148,41 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
         story.append(t)
         story.append(Spacer(1, 20))
 
-    # --- 6. CLOSING BLOCK (Evidence + Attestation + Disclaimer) ---
+    # --- 6. CLOSING BLOCK ---
     closing_elements = []
 
-    # A. EVIDENCE SECTION (Dynamic 1:1 Mapping)
+    # A. EVIDENCE SECTION (Scope-Sorted)
     closing_elements.append(Paragraph("<b>Evidence & Assurance:</b>", styles['Heading4']))
     
-    # 1. Identify what was reported
+    # Get List of what was reported
     reported_activities = df['Activity'].unique().tolist() if not df.empty else []
     
-    # 2. Define exact mapping
-    evidence_map = {
-        "Natural Gas": "Natural Gas Invoices",
-        "Heating Oil": "Heating Oil Purchase Receipts",
-        "Propane": "Propane Purchase Receipts",
-        "Fleet Diesel": "Fuel Logs/Receipts (Diesel)",
-        "Fleet Petrol": "Fuel Logs/Receipts (Petrol)",
-        "R410A Refill": "HVAC Maintenance Log (R410A)",
-        "R32 Refill": "HVAC Maintenance Log (R32)",
-        "R134a Refill": "HVAC Maintenance Log (R134a)",
-        "Electricity": "Electricity Utility Invoices",
-        "District Heating": "District Heating Invoices",
-        "Grey Fleet Travel": "Mileage Claims / Travel Logs"
-    }
-
-    # 3. Build the list dynamically
     required_evidence = []
-    for activity in reported_activities:
-        # Match the activity name to the evidence map
-        for key, evidence_name in evidence_map.items():
-            if key in activity: 
-                required_evidence.append(evidence_name)
-    
-    # Deduplicate list
-    required_evidence = list(set(required_evidence))
 
+    # 1. SCOPE 1 CHECKS (Gas, Oil, Propane, Fleet, Refrigerants)
+    if any("Natural Gas" in act for act in reported_activities):
+        required_evidence.append("Natural Gas Invoices")
+    if any("Heating Oil" in act for act in reported_activities):
+        required_evidence.append("Heating Oil Purchase Receipts")
+    if any("Propane" in act for act in reported_activities):
+        required_evidence.append("Propane Purchase Receipts")
+    if any("Diesel" in act for act in reported_activities):
+        required_evidence.append("Fuel Logs/Receipts (Diesel)")
+    if any("Petrol" in act for act in reported_activities):
+        required_evidence.append("Fuel Logs/Receipts (Petrol)")
+    if any("Refill" in act for act in reported_activities):
+        required_evidence.append("HVAC Maintenance Log (Refrigerants)")
+
+    # 2. SCOPE 2 CHECKS (Electricity, Heat)
+    if any("Electricity" in act for act in reported_activities):
+        required_evidence.append("Electricity Utility Invoices")
+    if any("District Heating" in act for act in reported_activities):
+        required_evidence.append("District Heating Invoices")
+
+    # 3. SCOPE 3 CHECKS (Grey Fleet)
+    if any("Grey Fleet" in act for act in reported_activities):
+        required_evidence.append("Mileage Claims / Travel Logs")
+    
     if not required_evidence:
         evidence_html = "No material emissions reported.<br/>"
     else:
@@ -212,7 +212,7 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
     closing_elements.append(Paragraph(sig_text, styles['Normal']))
     closing_elements.append(Spacer(1, 20))
     
-    # C. DISCLAIMER (With Negative Assurance Logic)
+    # C. DISCLAIMER (Detailed Exclusions)
     all_possible_inputs = [
         "Natural Gas", "Heating Oil", "Propane", 
         "Fleet Diesel", "Fleet Petrol", 
@@ -241,7 +241,7 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
     """
     closing_elements.append(Paragraph(disclaimer_text, disclaimer_style))
 
-    # Add the Unbreakable Block
+    # ADD THE UNBREAKABLE BLOCK
     story.append(KeepTogether(closing_elements))
 
     # --- FOOTER ---
@@ -255,7 +255,7 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
     doc.build(story, onFirstPage=add_footer, onLaterPages=add_footer)
     return buffer.getvalue()
 
-# --- 3. THE APP (UI) ---
+# --- 3. THE APP (UI - Full Readability) ---
 st.set_page_config(page_title="VSME Enterprise OS", page_icon="🏢")
 
 # EMISSION FACTORS
@@ -279,7 +279,7 @@ st.title("🏢 Supplier ESG Enterprise OS")
 st.caption("Aligned with GHG Protocol (Scope 1, 2 & Grey Fleet)")
 st.progress(st.session_state.step / 3)
 
-# STEP 1
+# STEP 1: COMPANY PROFILE
 if st.session_state.step == 1:
     st.header("Step 1: Company Profile")
     comp_input = st.text_input("Company Legal Name", value=st.session_state.get("company", ""))
@@ -300,7 +300,7 @@ if st.session_state.step == 1:
         else:
             st.error("Company Name and Revenue are required.")
 
-# STEP 2 (Fully Unpacked for Readability)
+# STEP 2: ACTIVITY DATA
 elif st.session_state.step == 2:
     st.header("Step 2: Activity Data")
     
@@ -373,7 +373,7 @@ elif st.session_state.step == 2:
             st.session_state.step = 3
             st.rerun()
 
-# STEP 3
+# STEP 3: DOWNLOAD
 elif st.session_state.step == 3:
     st.header("Step 3: Validated")
     t = st.session_state.totals
