@@ -3,8 +3,8 @@ import pandas as pd
 from io import BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
 from datetime import datetime
 from dataclasses import dataclass
 
@@ -52,17 +52,14 @@ def summarize(df):
     s3 = df[df["Scope"] == "Scope 3"]["Emissions_kgCO2e"].sum()
     return {"scope1": s1, "scope2": s2, "scope3": s3, "total": s1 + s2 + s3}
 
-# --- 2. THE PDF GENERATOR (With Branding Footer) ---
+# --- 2. THE PDF GENERATOR (Smart Evidence & Negative Assurance) ---
 def build_pdf(company_name, country, year, revenue, currency, df, totals, evidence_files, signer_name):
     buffer = BytesIO()
-    # TOP MARGIN set to 30, BOTTOM MARGIN set to 40 to make room for footer
     doc = SimpleDocTemplate(buffer, pagesize=A4, title=f"Carbon Footprint - {company_name}", topMargin=30, bottomMargin=40)
     styles = getSampleStyleSheet()
     story = []
 
-    # --- CONTENT GENERATION ---
-    
-    # 1. HEADER (Formal)
+    # 1. HEADER
     date_str = datetime.now().strftime('%d %b %Y')
     story.append(Paragraph("<b>CORPORATE CARBON FOOTPRINT DECLARATION</b>", styles['Title']))
     story.append(Spacer(1, 12))
@@ -111,14 +108,12 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
         ('FONTNAME', (0, 1), (0, 3), 'Helvetica'),
-        # Total Row
         ('BACKGROUND', (0, 4), (-1, 4), colors.navy),
         ('TEXTCOLOR', (0, 4), (-1, 4), colors.white),
         ('FONTNAME', (0, 4), (-1, 4), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 4), (-1, 4), 11),
         ('TOPPADDING', (0, 4), (-1, 4), 8),
         ('BOTTOMPADDING', (0, 4), (-1, 4), 8),
-        # Intensity Row
         ('BACKGROUND', (0, 5), (-1, 5), colors.aliceblue),
         ('FONTNAME', (0, 5), (-1, 5), 'Helvetica-Oblique'),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
@@ -151,20 +146,62 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
         ]))
         story.append(t)
+        story.append(Spacer(1, 20))
 
-    # 6. EVIDENCE & ASSURANCE
-    story.append(Spacer(1, 20))
-    story.append(Paragraph("<b>Evidence & Assurance:</b>", styles['Heading4']))
+    # --- 6. CLOSING BLOCK (Evidence + Attestation + Disclaimer) ---
+    closing_elements = []
+
+    # A. EVIDENCE SECTION (Dynamic 1:1 Mapping)
+    closing_elements.append(Paragraph("<b>Evidence & Assurance:</b>", styles['Heading4']))
     
-    num_files = len(evidence_files)
-    if num_files > 0:
-        evidence_text = f"Self-declared by supplier. Evidence attached: {num_files} file(s)."
+    # 1. Identify what was reported
+    reported_activities = df['Activity'].unique().tolist() if not df.empty else []
+    
+    # 2. Define exact mapping
+    evidence_map = {
+        "Natural Gas": "Natural Gas Invoices",
+        "Heating Oil": "Heating Oil Purchase Receipts",
+        "Propane": "Propane Purchase Receipts",
+        "Fleet Diesel": "Fuel Logs/Receipts (Diesel)",
+        "Fleet Petrol": "Fuel Logs/Receipts (Petrol)",
+        "R410A Refill": "HVAC Maintenance Log (R410A)",
+        "R32 Refill": "HVAC Maintenance Log (R32)",
+        "R134a Refill": "HVAC Maintenance Log (R134a)",
+        "Electricity": "Electricity Utility Invoices",
+        "District Heating": "District Heating Invoices",
+        "Grey Fleet Travel": "Mileage Claims / Travel Logs"
+    }
+
+    # 3. Build the list dynamically
+    required_evidence = []
+    for activity in reported_activities:
+        # Match the activity name to the evidence map
+        for key, evidence_name in evidence_map.items():
+            if key in activity: 
+                required_evidence.append(evidence_name)
+    
+    # Deduplicate list
+    required_evidence = list(set(required_evidence))
+
+    if not required_evidence:
+        evidence_html = "No material emissions reported.<br/>"
     else:
-        evidence_text = "Self-Declaration (No supporting evidence attached)."
-        
-    story.append(Paragraph(evidence_text, styles['Normal']))
+        evidence_html = ""
+        for item in required_evidence:
+            evidence_html += f"&bull; {item}<br/>"
     
-    story.append(Spacer(1, 30))
+    file_msg = f"(Attached: {len(evidence_files)} digital files)" if evidence_files else "(No digital files attached)"
+    
+    evidence_text = f"""
+    <b>Assurance Level:</b> Limited (self-attested, document trail available)<br/><br/>
+    <b>Supporting documentation retained by supplier:</b><br/>
+    {evidence_html}
+    <i>Available upon buyer request {file_msg}</i>
+    """
+    closing_elements.append(Paragraph(evidence_text, styles['Normal']))
+    closing_elements.append(Spacer(1, 30))
+
+    # B. ATTESTATION
     sig_text = f"""
     <b>ATTESTATION:</b><br/>
     I, <b>{signer_name}</b>, certify that the activity data and revenue provided are accurate to the best of my knowledge.
@@ -172,25 +209,56 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
     __________________________<br/>
     Authorized Signature
     """
-    story.append(Paragraph(sig_text, styles['Normal']))
+    closing_elements.append(Paragraph(sig_text, styles['Normal']))
+    closing_elements.append(Spacer(1, 20))
+    
+    # C. DISCLAIMER (With Negative Assurance Logic)
+    all_possible_inputs = [
+        "Natural Gas", "Heating Oil", "Propane", 
+        "Fleet Diesel", "Fleet Petrol", 
+        "Refill", # Catch-all for refrigerants
+        "Electricity", "District Heating", "Grey Fleet Travel"
+    ]
+    
+    excluded_items = []
+    for potential in all_possible_inputs:
+        if not any(potential in act for act in reported_activities):
+            excluded_items.append(potential)
+    
+    disclaimer_style = ParagraphStyle('Disclaimer', parent=styles['Normal'], fontSize=7, textColor=colors.grey, leading=9)
+    
+    if excluded_items:
+        exclusion_str = ", ".join(excluded_items)
+        exclusion_msg = f"<b>Boundary Exclusions:</b> The following sources were assessed but excluded due to zero reported activity: {exclusion_str}."
+    else:
+        exclusion_msg = "<b>Boundary Exclusions:</b> None (All standard boundary categories were reported)."
 
-    # --- FOOTER FUNCTION ---
+    disclaimer_text = f"""
+    <b>DISCLAIMER:</b> This report uses supplier-provided data and ADEME Base Carbone factors. 
+    It has not been independently verified. {exclusion_msg}
+    Buyers should conduct due diligence for CSRD reporting. 
+    For third-party verification: <b>verify@vsme.io</b>
+    """
+    closing_elements.append(Paragraph(disclaimer_text, disclaimer_style))
+
+    # Add the Unbreakable Block
+    story.append(KeepTogether(closing_elements))
+
+    # --- FOOTER ---
     def add_footer(canvas, doc):
         canvas.saveState()
         canvas.setFont('Helvetica', 8)
         canvas.setFillColor(colors.grey)
-        # Centered Footer
         canvas.drawCentredString(A4[0]/2, 20, "Generated by VSME Supplier ESG OS • Methodology Aligned with GHG Protocol")
         canvas.restoreState()
 
-    # BUILD PDF with Footer on all pages
     doc.build(story, onFirstPage=add_footer, onLaterPages=add_footer)
     return buffer.getvalue()
 
 # --- 3. THE APP (UI) ---
 st.set_page_config(page_title="VSME Enterprise OS", page_icon="🏢")
 
-# EMISSION FACTORS (ADEME / BASE CARBONE)
+# EMISSION FACTORS
 FACTORS = {
     "natural_gas": Factor("Natural Gas", 0.244, "kgCO2e/kWh", "ADEME", "GAS-NAT"),
     "heating_oil": Factor("Heating Oil", 3.2, "kgCO2e/L", "ADEME", "OIL-HEAT"),
@@ -211,21 +279,18 @@ st.title("🏢 Supplier ESG Enterprise OS")
 st.caption("Aligned with GHG Protocol (Scope 1, 2 & Grey Fleet)")
 st.progress(st.session_state.step / 3)
 
-# STEP 1: COMPANY PROFILE
+# STEP 1
 if st.session_state.step == 1:
     st.header("Step 1: Company Profile")
-    
-    # Auto-Capitalize Company Name for professional look
     comp_input = st.text_input("Company Legal Name", value=st.session_state.get("company", ""))
     st.session_state.company = comp_input.strip().upper() if comp_input else ""
-    
     st.session_state.country = st.text_input("Site Country", value="France")
     st.session_state.year = st.text_input("Reporting Period", value="2025")
     
     c1, c2 = st.columns(2)
-    with c1:
+    with c1: 
         st.session_state.revenue = st.number_input("Annual Revenue", min_value=0.0, step=1000.0, format="%.2f")
-    with c2:
+    with c2: 
         st.session_state.currency = st.selectbox("Currency", ["EUR", "USD", "GBP"])
         
     if st.button("Start Assessment"):
@@ -235,33 +300,43 @@ if st.session_state.step == 1:
         else:
             st.error("Company Name and Revenue are required.")
 
-# STEP 2: DATA INPUT
+# STEP 2 (Fully Unpacked for Readability)
 elif st.session_state.step == 2:
     st.header("Step 2: Activity Data")
     
     st.subheader("🔥 Scope 1: Direct Emissions")
     st.markdown("**Stationary Combustion**")
     c1, c2, c3 = st.columns(3)
-    with c1: gas = st.number_input("Natural Gas (kWh)", min_value=0.0, format="%.2f")
-    with c2: fioul = st.number_input("Heating Oil (Liters)", min_value=0.0, format="%.2f")
-    with c3: propane = st.number_input("Propane (kg)", min_value=0.0, format="%.2f")
+    with c1: 
+        gas = st.number_input("Natural Gas (kWh)", min_value=0.0, format="%.2f")
+    with c2: 
+        fioul = st.number_input("Heating Oil (Liters)", min_value=0.0, format="%.2f")
+    with c3: 
+        propane = st.number_input("Propane (kg)", min_value=0.0, format="%.2f")
 
     st.markdown("**Mobile Combustion (Company Fleet)**")
     c4, c5 = st.columns(2)
-    with c4: diesel = st.number_input("Fleet Diesel (Liters)", min_value=0.0, format="%.2f")
-    with c5: petrol = st.number_input("Fleet Petrol (Liters)", min_value=0.0, format="%.2f")
+    with c4: 
+        diesel = st.number_input("Fleet Diesel (Liters)", min_value=0.0, format="%.2f")
+    with c5: 
+        petrol = st.number_input("Fleet Petrol (Liters)", min_value=0.0, format="%.2f")
         
     st.markdown("**Fugitive Emissions (Refrigerants)**")
     c6, c7, c8 = st.columns(3)
-    with c6: r410a = st.number_input("R410A Refill (kg)", min_value=0.0, format="%.2f")
-    with c7: r32 = st.number_input("R32 Refill (kg)", min_value=0.0, format="%.2f")
-    with c8: r134a = st.number_input("R134a Refill (kg)", min_value=0.0, format="%.2f")
+    with c6: 
+        r410a = st.number_input("R410A Refill (kg)", min_value=0.0, format="%.2f")
+    with c7: 
+        r32 = st.number_input("R32 Refill (kg)", min_value=0.0, format="%.2f")
+    with c8: 
+        r134a = st.number_input("R134a Refill (kg)", min_value=0.0, format="%.2f")
 
     st.divider()
     st.subheader("⚡ Scope 2: Indirect Energy")
     c9, c10 = st.columns(2)
-    with c9: elec = st.number_input("Electricity (kWh)", min_value=0.0, format="%.2f")
-    with c10: heat = st.number_input("District Heating (kWh)", min_value=0.0, format="%.2f")
+    with c9: 
+        elec = st.number_input("Electricity (kWh)", min_value=0.0, format="%.2f")
+    with c10: 
+        heat = st.number_input("District Heating (kWh)", min_value=0.0, format="%.2f")
 
     st.divider()
     st.subheader("🚗 Scope 3: Grey Fleet")
@@ -270,12 +345,9 @@ elif st.session_state.step == 2:
 
     st.divider()
     files = st.file_uploader("Upload Evidence", accept_multiple_files=True)
-    
-    # Signature Field
     signer = st.text_input("Full Legal Name of Authorized Signer (e.g. Jean Dupont)")
 
     if st.button("Generate Report"):
-        # Validation
         if not signer or len(signer) < 3:
             st.error("Please enter a valid full name for the attestation signature.")
         else:
@@ -301,25 +373,21 @@ elif st.session_state.step == 2:
             st.session_state.step = 3
             st.rerun()
 
-# STEP 3: DOWNLOAD
+# STEP 3
 elif st.session_state.step == 3:
     st.header("Step 3: Validated")
     t = st.session_state.totals
-    
     c1, c2, c3 = st.columns(3)
     c1.metric("Scope 1", f"{t['scope1']:,.2f}", "kgCO2e")
     c2.metric("Scope 2", f"{t['scope2']:,.2f}", "kgCO2e")
     c3.metric("Scope 3", f"{t['scope3']:,.2f}", "kgCO2e")
-    
     st.metric("Total Footprint", f"{t['total']:,.2f} kgCO2e")
     
-    # Build PDF with Footer and Signer
     pdf_data = build_pdf(
         st.session_state.company, st.session_state.country, st.session_state.year,
         st.session_state.revenue, st.session_state.currency,
         st.session_state.results_df, st.session_state.totals, st.session_state.evidence, st.session_state.signer
     )
-    
     st.download_button("Download Corporate Carbon Pack (PDF)", data=pdf_data, file_name="Carbon_Pack.pdf", mime="application/pdf")
     if st.button("New Assessment"):
         st.session_state.step = 1
