@@ -8,7 +8,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from datetime import datetime
 from dataclasses import dataclass
 
-# --- 1. THE BRAIN ---
+# --- 1. THE BRAIN (Calculation Logic) ---
 @dataclass
 class ActivityInput:
     label: str
@@ -52,14 +52,17 @@ def summarize(df):
     s3 = df[df["Scope"] == "Scope 3"]["Emissions_kgCO2e"].sum()
     return {"scope1": s1, "scope2": s2, "scope3": s3, "total": s1 + s2 + s3}
 
-# --- 2. THE PDF GENERATOR (Pro Dashboard Look) ---
+# --- 2. THE PDF GENERATOR (With Branding Footer) ---
 def build_pdf(company_name, country, year, revenue, currency, df, totals, evidence_files, signer_name):
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, title=f"Carbon Footprint - {company_name}", topMargin=30, bottomMargin=30)
+    # TOP MARGIN set to 30, BOTTOM MARGIN set to 40 to make room for footer
+    doc = SimpleDocTemplate(buffer, pagesize=A4, title=f"Carbon Footprint - {company_name}", topMargin=30, bottomMargin=40)
     styles = getSampleStyleSheet()
     story = []
 
-    # 1. HEADER
+    # --- CONTENT GENERATION ---
+    
+    # 1. HEADER (Formal)
     date_str = datetime.now().strftime('%d %b %Y')
     story.append(Paragraph("<b>CORPORATE CARBON FOOTPRINT DECLARATION</b>", styles['Title']))
     story.append(Spacer(1, 12))
@@ -68,7 +71,6 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
     story.append(Spacer(1, 20))
     
     # 2. COMPANY DETAILS
-    # FIX 1: Company Name is already upper-cased in the App section before passing here
     info_text = f"""
     <b>Company Name:</b> {company_name}<br/>
     <b>Site Country:</b> {country}<br/>
@@ -78,7 +80,7 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
     story.append(Paragraph(info_text, styles['Normal']))
     story.append(Spacer(1, 15))
 
-    # 3. BOUNDARY
+    # 3. BOUNDARY STATEMENT
     boundary_text = """
     <b>BOUNDARY STATEMENT:</b><br/>
     This report covers <b>Scope 1</b> (Direct), <b>Scope 2</b> (Energy Indirect), and selected <b>Scope 3</b> 
@@ -88,15 +90,14 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
     story.append(Paragraph(boundary_text, styles['Normal']))
     story.append(Spacer(1, 20))
 
-    # 4. SUMMARY DASHBOARD (Beautifully Styled)
+    # 4. SUMMARY DASHBOARD
     carbon_intensity = (totals['total'] / revenue) if revenue > 0 else 0
     
     story.append(Paragraph("<b>EMISSIONS SUMMARY</b>", styles['Heading3']))
     story.append(Spacer(1, 5))
 
-    # FIX 2: Added :.2f to carbon_intensity to prevent "18.0431"
     summary_data = [
-        ["METRIC", "VALUE"], # Header
+        ["METRIC", "VALUE"], 
         ["Scope 1 (Direct Emissions)", f"{totals['scope1']:,.2f} kgCO2e"],
         ["Scope 2 (Indirect Energy)", f"{totals['scope2']:,.2f} kgCO2e"],
         ["Scope 3 (Grey Fleet)", f"{totals['scope3']:,.2f} kgCO2e"],
@@ -106,29 +107,22 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
     
     t_summary = Table(summary_data, colWidths=[250, 150])
     t_summary.setStyle(TableStyle([
-        # Header Row
         ('BACKGROUND', (0, 0), (-1, 0), colors.whitesmoke),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-        
-        # Scope Rows
         ('FONTNAME', (0, 1), (0, 3), 'Helvetica'),
-        
-        # GRAND TOTAL ROW (The "Pop")
+        # Total Row
         ('BACKGROUND', (0, 4), (-1, 4), colors.navy),
         ('TEXTCOLOR', (0, 4), (-1, 4), colors.white),
         ('FONTNAME', (0, 4), (-1, 4), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 4), (-1, 4), 11),
         ('TOPPADDING', (0, 4), (-1, 4), 8),
         ('BOTTOMPADDING', (0, 4), (-1, 4), 8),
-
-        # INTENSITY ROW (Distinct)
+        # Intensity Row
         ('BACKGROUND', (0, 5), (-1, 5), colors.aliceblue),
         ('FONTNAME', (0, 5), (-1, 5), 'Helvetica-Oblique'),
-        
-        # Grid settings
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('ALIGN', (1, 0), (1, -1), 'RIGHT'), # Align numbers to right
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
     ]))
     story.append(t_summary)
     story.append(Spacer(1, 20))
@@ -162,7 +156,6 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
     story.append(Spacer(1, 20))
     story.append(Paragraph("<b>Evidence & Assurance:</b>", styles['Heading4']))
     
-    # FIX 4: Handle "0 files" text professionally
     num_files = len(evidence_files)
     if num_files > 0:
         evidence_text = f"Self-declared by supplier. Evidence attached: {num_files} file(s)."
@@ -181,13 +174,23 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
     """
     story.append(Paragraph(sig_text, styles['Normal']))
 
-    doc.build(story)
+    # --- FOOTER FUNCTION ---
+    def add_footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont('Helvetica', 8)
+        canvas.setFillColor(colors.grey)
+        # Centered Footer
+        canvas.drawCentredString(A4[0]/2, 20, "Generated by VSME Supplier ESG OS • Methodology Aligned with GHG Protocol")
+        canvas.restoreState()
+
+    # BUILD PDF with Footer on all pages
+    doc.build(story, onFirstPage=add_footer, onLaterPages=add_footer)
     return buffer.getvalue()
 
-# --- 3. THE APP ---
+# --- 3. THE APP (UI) ---
 st.set_page_config(page_title="VSME Enterprise OS", page_icon="🏢")
 
-# FULL FACTORS
+# EMISSION FACTORS (ADEME / BASE CARBONE)
 FACTORS = {
     "natural_gas": Factor("Natural Gas", 0.244, "kgCO2e/kWh", "ADEME", "GAS-NAT"),
     "heating_oil": Factor("Heating Oil", 3.2, "kgCO2e/L", "ADEME", "OIL-HEAT"),
@@ -208,9 +211,11 @@ st.title("🏢 Supplier ESG Enterprise OS")
 st.caption("Aligned with GHG Protocol (Scope 1, 2 & Grey Fleet)")
 st.progress(st.session_state.step / 3)
 
+# STEP 1: COMPANY PROFILE
 if st.session_state.step == 1:
     st.header("Step 1: Company Profile")
-    # FIX 1: Applied .upper() here to ensure the session state stores it clean
+    
+    # Auto-Capitalize Company Name for professional look
     comp_input = st.text_input("Company Legal Name", value=st.session_state.get("company", ""))
     st.session_state.company = comp_input.strip().upper() if comp_input else ""
     
@@ -230,6 +235,7 @@ if st.session_state.step == 1:
         else:
             st.error("Company Name and Revenue are required.")
 
+# STEP 2: DATA INPUT
 elif st.session_state.step == 2:
     st.header("Step 2: Activity Data")
     
@@ -265,11 +271,11 @@ elif st.session_state.step == 2:
     st.divider()
     files = st.file_uploader("Upload Evidence", accept_multiple_files=True)
     
-    # FIX 3: Clearer Label for Signature
+    # Signature Field
     signer = st.text_input("Full Legal Name of Authorized Signer (e.g. Jean Dupont)")
 
     if st.button("Generate Report"):
-        # FIX 3: Validation Check
+        # Validation
         if not signer or len(signer) < 3:
             st.error("Please enter a valid full name for the attestation signature.")
         else:
@@ -295,6 +301,7 @@ elif st.session_state.step == 2:
             st.session_state.step = 3
             st.rerun()
 
+# STEP 3: DOWNLOAD
 elif st.session_state.step == 3:
     st.header("Step 3: Validated")
     t = st.session_state.totals
@@ -306,6 +313,7 @@ elif st.session_state.step == 3:
     
     st.metric("Total Footprint", f"{t['total']:,.2f} kgCO2e")
     
+    # Build PDF with Footer and Signer
     pdf_data = build_pdf(
         st.session_state.company, st.session_state.country, st.session_state.year,
         st.session_state.revenue, st.session_state.currency,
