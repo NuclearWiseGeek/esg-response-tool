@@ -3,16 +3,16 @@ import pandas as pd
 from io import BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle, ListStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, ListFlowable, ListItem
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
 from datetime import datetime
 from dataclasses import dataclass
 
-# --- 1. TRANSLATION ENGINE (The Dictionary Brain) ---
+# --- 1. TRANSLATION ENGINE ---
 TRANSLATIONS = {
     "en": {
         "title": "🏢 Supplier ESG Enterprise OS",
-        "caption": "Aligned with GHG Protocol (Scope 1, 2 & Grey Fleet)",
+        "caption": "Aligned with GHG Protocol (Scope 1, 2 & Business Travel)",
         "sidebar_lang": "Language / Langue",
         "step1_header": "Step 1: Company Profile",
         "company_label": "Company Legal Name",
@@ -40,9 +40,13 @@ TRANSLATIONS = {
         "s2_header": "⚡ Scope 2: Indirect Energy",
         "elec_label": "Electricity (kWh)",
         "heat_label": "District Heating (kWh)",
-        "s3_header": "🚗 Scope 3: Grey Fleet",
-        "s3_desc": "Business travel in employee-owned vehicles.",
-        "grey_label": "Total Distance (km)",
+        
+        "s3_header": "✈️ Scope 3: Business Travel",
+        "s3_desc": "Business travel not covered in Scope 1 (Grey Fleet, Flights, Hotels).",
+        "grey_label": "Employee Vehicles (km driven)",
+        "flight_label": "Business Flights (km flown)",
+        "hotel_label": "Hotel Nights (number of nights)",
+        
         "upload_label": "Upload Evidence",
         "signer_label": "Full Legal Name of Authorized Signer (e.g. Jean Dupont)",
         "btn_gen": "Generate Report",
@@ -64,7 +68,7 @@ TRANSLATIONS = {
         "pdf_boundary_title": "BOUNDARY STATEMENT:",
         "pdf_boundary_text": """
         This report covers <b>Scope 1</b> (Direct), <b>Scope 2</b> (Energy Indirect), and selected <b>Scope 3</b> 
-        (Grey Fleet / Business Travel). Excludes upstream/downstream Scope 3 categories unless noted.
+        (Business Travel/Grey Fleet). Excludes upstream/downstream Scope 3 categories unless noted.
         Calculations use <b>ADEME Base Carbone</b> emission factors.
         """,
         "pdf_summary_title": "EMISSIONS SUMMARY",
@@ -72,7 +76,7 @@ TRANSLATIONS = {
         "pdf_col_value": "VALUE",
         "pdf_s1": "Scope 1 (Direct Emissions)",
         "pdf_s2": "Scope 2 (Indirect Energy)",
-        "pdf_s3": "Scope 3 (Grey Fleet)",
+        "pdf_s3": "Scope 3 (Business Travel)",
         "pdf_total": "TOTAL FOOTPRINT",
         "pdf_intensity": "CARBON INTENSITY",
         "pdf_detail_title": "Detailed Breakdown:",
@@ -93,7 +97,7 @@ TRANSLATIONS = {
         "pdf_attest_text": "I, <b>{signer}</b>, certify that the activity data and revenue provided are accurate to the best of my knowledge.",
         "pdf_sig": "Authorized Signature",
         
-        # DISCLAIMER POINTS (Structured)
+        # DISCLAIMER POINTS
         "pdf_disc_title": "DISCLAIMER & LIMITATIONS:",
         "disc_p1": "<b>Methodology:</b> Calculations use supplier-provided activity data and ADEME Base Carbone v23.0 emission factors.",
         "disc_p2": "<b>Assurance:</b> This report is self-declared and has not been independently verified.",
@@ -116,7 +120,22 @@ TRANSLATIONS = {
         "ev_hvac": "HVAC Maintenance Log (Refrigerants)",
         "ev_elec": "Electricity Utility Invoices",
         "ev_heat": "District Heating Invoices",
-        "ev_travel": "Mileage Claims / Travel Logs"
+        "ev_travel": "Mileage Claims / Travel Logs",
+        "ev_flight": "Flight Tickets / Travel Agency Reports",
+        "ev_hotel": "Hotel Invoices / Expense Reports",
+        
+        # Exclusions Labels
+        "ex_gas": "Natural Gas",
+        "ex_oil": "Heating Oil",
+        "ex_prop": "Propane",
+        "ex_diesel": "Fleet Diesel",
+        "ex_petrol": "Fleet Petrol",
+        "ex_ref": "Fugitive Emissions (Refrigerants)",
+        "ex_elec": "Electricity",
+        "ex_heat": "District Heating",
+        "ex_grey": "Employee Vehicles",
+        "ex_flight": "Business Flights",
+        "ex_hotel": "Hotel Nights"
     },
     
     "fr": {
@@ -149,9 +168,13 @@ TRANSLATIONS = {
         "s2_header": "⚡ Scope 2 : Énergie Indirecte",
         "elec_label": "Électricité (kWh)",
         "heat_label": "Chauffage Urbain (kWh)",
-        "s3_header": "🚗 Scope 3 : Déplacements Pro",
-        "s3_desc": "Déplacements professionnels (véhicules personnels / Grey Fleet).",
-        "grey_label": "Distance Totale (km)",
+        
+        "s3_header": "✈️ Scope 3 : Déplacements Pro",
+        "s3_desc": "Déplacements non inclus dans le Scope 1 (Véhicules Perso, Vols, Hôtels).",
+        "grey_label": "Véhicules Salariés (km parcourus)",
+        "flight_label": "Vols Affaires (km parcourus)",
+        "hotel_label": "Nuitées d'Hôtel (nombre de nuits)",
+        
         "upload_label": "Télécharger Justificatifs",
         "signer_label": "Nom complet du signataire autorisé (ex: Jean Dupont)",
         "btn_gen": "Générer le Rapport",
@@ -172,8 +195,8 @@ TRANSLATIONS = {
         "pdf_revenue": "Chiffre d'Affaires :",
         "pdf_boundary_title": "DÉCLARATION DE PÉRIMÈTRE :",
         "pdf_boundary_text": """
-        Ce rapport couvre le <b>Scope 1</b> (Direct), le <b>Scope 2</b> (Énergie Indirecte), et une partie du <b>Scope 3</b> 
-        (Déplacements Professionnels). Exclut les catégories amont/aval du Scope 3 sauf indication contraire.
+        Ce rapport couvre le <b>Scope 1</b> (Direct), le <b>Scope 2</b> (Énergie Indirecte), et le <b>Scope 3</b> 
+        sélectionné (Déplacements Pro : Véhicules/Vols/Hôtels). Exclut les autres catégories Scope 3.
         Calculs basés sur les facteurs d'émission <b>ADEME Base Carbone</b>.
         """,
         "pdf_summary_title": "RÉSUMÉ DES ÉMISSIONS",
@@ -202,7 +225,7 @@ TRANSLATIONS = {
         "pdf_attest_text": "Je soussigné(e), <b>{signer}</b>, certifie que les données d'activité et le CA fournis sont exacts et sincères.",
         "pdf_sig": "Signature Autorisée",
         
-        # DISCLAIMER POINTS (Structured)
+        # DISCLAIMER POINTS
         "pdf_disc_title": "AVERTISSEMENT & LIMITATIONS :",
         "disc_p1": "<b>Méthodologie :</b> Les calculs utilisent les données d'activité fournies par le fournisseur et les facteurs ADEME Base Carbone v23.0.",
         "disc_p2": "<b>Assurance :</b> Ce rapport est auto-déclaratif et n'a pas fait l'objet d'une vérification indépendante.",
@@ -225,7 +248,22 @@ TRANSLATIONS = {
         "ev_hvac": "Carnet d'entretien CVC (Fluides Frigorigènes)",
         "ev_elec": "Factures d'Électricité",
         "ev_heat": "Factures Chauffage Urbain",
-        "ev_travel": "Notes de Frais / Relevés Kilométriques"
+        "ev_travel": "Notes de Frais / Relevés Kilométriques",
+        "ev_flight": "Billets d'Avion / Relevés Agence",
+        "ev_hotel": "Factures d'Hôtel / Notes de Frais",
+        
+        # Exclusions Labels
+        "ex_gas": "Gaz Naturel",
+        "ex_oil": "Fioul Domestique",
+        "ex_prop": "Propane",
+        "ex_diesel": "Diesel Flotte",
+        "ex_petrol": "Essence Flotte",
+        "ex_ref": "Émissions Fugitives (Refrigérants)",
+        "ex_elec": "Électricité",
+        "ex_heat": "Chauffage Urbain",
+        "ex_grey": "Véhicules Salariés",
+        "ex_flight": "Vols Affaires",
+        "ex_hotel": "Nuitées d'Hôtel"
     }
 }
 
@@ -251,7 +289,7 @@ def get_activity_label(key, lang):
         "diesel": "diesel_label", "petrol": "petrol_label",
         "ref_R410A": "r410a_label", "ref_R32": "r32_label", "ref_R134a": "r134a_label",
         "electricity_fr": "elec_label", "district_heat": "heat_label",
-        "grey_fleet_avg": "grey_label"
+        "grey_fleet_avg": "grey_label", "flight_avg": "flight_label", "hotel_night_avg": "hotel_label"
     }
     t_key = map_keys.get(key, key)
     raw_label = TRANSLATIONS[lang].get(t_key, key)
@@ -259,25 +297,34 @@ def get_activity_label(key, lang):
 
 def calculate_emissions(inputs, factors, lang):
     rows = []
-    for key, act in inputs.items():
-        if act.quantity <= 0: continue
-        
-        factor = factors.get(key)
-        if not factor: continue
-        
-        emissions = act.quantity * factor.value
-        display_label = get_activity_label(key, lang)
-        
-        rows.append({
-            "Scope": act.category.split(" - ")[0], 
-            "Category": act.category,
-            "Activity": display_label,
-            "Quantity": act.quantity,
-            "Unit": act.unit,
-            "FactorRef": f"{factor.value} ({factor.unit})",
-            "Emissions_kgCO2e": emissions,
-            "Source": f"{factor.source} [{factor.id}]"
-        })
+    # Force Scope Order for Table: S1 -> S2 -> S3
+    order = [
+        "natural_gas", "heating_oil", "propane", "diesel", "petrol", "ref_R410A", "ref_R32", "ref_R134a", # S1
+        "electricity_fr", "district_heat", # S2
+        "grey_fleet_avg", "flight_avg", "hotel_night_avg" # S3
+    ]
+    
+    for key in order:
+        if key in inputs:
+            act = inputs[key]
+            if act.quantity <= 0: continue
+            
+            factor = factors.get(key)
+            if not factor: continue
+            
+            emissions = act.quantity * factor.value
+            display_label = get_activity_label(key, lang)
+            
+            rows.append({
+                "Scope": act.category.split(" - ")[0], 
+                "Category": act.category,
+                "Activity": display_label,
+                "Quantity": act.quantity,
+                "Unit": act.unit,
+                "FactorRef": f"{factor.value} ({factor.unit})",
+                "Emissions_kgCO2e": emissions,
+                "Source": f"{factor.source} [{factor.id}]"
+            })
     return pd.DataFrame(rows)
 
 def summarize(df):
@@ -287,7 +334,7 @@ def summarize(df):
     s3 = df[df["Scope"] == "Scope 3"]["Emissions_kgCO2e"].sum()
     return {"scope1": s1, "scope2": s2, "scope3": s3, "total": s1 + s2 + s3}
 
-# --- 3. PDF GENERATOR (Bilingual & Structured Bullets) ---
+# --- 3. PDF GENERATOR ---
 def build_pdf(company_name, country, year, revenue, currency, df, totals, evidence_files, signer_name, input_keys, lang):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, title=f"Carbon Footprint - {company_name}", topMargin=30, bottomMargin=60)
@@ -382,26 +429,34 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
     # --- 6. CLOSING BLOCK ---
     closing_elements = []
 
-    # A. EVIDENCE
+    # A. EVIDENCE (STRICT SORTING S1->S2->S3)
     closing_elements.append(Paragraph(f"<b>{T['pdf_evidence_title']}</b>", styles['Heading4']))
     
     required_evidence = []
-    # Mapping
+    
+    # Scope 1
     if any(k in input_keys for k in ["natural_gas"]): required_evidence.append(T['ev_gas'])
     if any(k in input_keys for k in ["heating_oil"]): required_evidence.append(T['ev_oil'])
     if any(k in input_keys for k in ["propane"]): required_evidence.append(T['ev_prop'])
     if any(k in input_keys for k in ["diesel"]): required_evidence.append(T['ev_diesel'])
     if any(k in input_keys for k in ["petrol"]): required_evidence.append(T['ev_petrol'])
     if any(k in input_keys for k in ["ref_R410A", "ref_R32", "ref_R134a"]): required_evidence.append(T['ev_hvac'])
+    
+    # Scope 2
     if any(k in input_keys for k in ["electricity_fr"]): required_evidence.append(T['ev_elec'])
     if any(k in input_keys for k in ["district_heat"]): required_evidence.append(T['ev_heat'])
+    
+    # Scope 3
     if any(k in input_keys for k in ["grey_fleet_avg"]): required_evidence.append(T['ev_travel'])
+    if any(k in input_keys for k in ["flight_avg"]): required_evidence.append(T['ev_flight'])
+    if any(k in input_keys for k in ["hotel_night_avg"]): required_evidence.append(T['ev_hotel'])
 
     if not required_evidence:
         evidence_html = f"{T['pdf_no_mat']}<br/>"
     else:
         evidence_html = ""
-        for item in list(set(required_evidence)):
+        # We iterate through required_evidence list which is ALREADY in order (s1, s2, s3)
+        for item in required_evidence:
             evidence_html += f"&bull; {item}<br/>"
     
     file_msg = f"({len(evidence_files)} {T['pdf_attached']})" if evidence_files else f"({T['pdf_no_files']})"
@@ -426,28 +481,38 @@ def build_pdf(company_name, country, year, revenue, currency, df, totals, eviden
     closing_elements.append(Paragraph(sig_text, styles['Normal']))
     closing_elements.append(Spacer(1, 20))
     
-    # C. DISCLAIMER (STRUCTURED BULLETS)
+    # C. DISCLAIMER (STRUCTURED BULLETS + VERTICAL SUB-LIST)
     closing_elements.append(Paragraph(f"<b>{T['pdf_disc_title']}</b>", styles['Heading4']))
     
-    # Logic for exclusions text
-    all_possible_keys = [
-        "natural_gas", "heating_oil", "propane", 
-        "diesel", "petrol", 
-        "ref_R410A", "electricity_fr", "district_heat", "grey_fleet_avg"
-    ]
-    excluded_keys = [k for k in all_possible_keys if k not in input_keys]
+    # Build Vertical Exclusion List
+    excluded_labels = []
     
-    if excluded_keys:
-        labels = [get_activity_label(k, lang) for k in excluded_keys]
-        labels = [l for l in labels if "R410A" not in l] 
-        if "ref_R410A" in excluded_keys and "ref_R32" in excluded_keys:
-            labels.append("Refrigerants/Fluides")
-        exclusion_str = ", ".join(labels)
-        disc_excl_text = f"{T['disc_p3_intro']} {exclusion_str}."
+    if "natural_gas" not in input_keys: excluded_labels.append(T['ex_gas'])
+    if "heating_oil" not in input_keys: excluded_labels.append(T['ex_oil'])
+    if "propane" not in input_keys: excluded_labels.append(T['ex_prop'])
+    if "diesel" not in input_keys: excluded_labels.append(T['ex_diesel'])
+    if "petrol" not in input_keys: excluded_labels.append(T['ex_petrol'])
+    
+    # Check if ANY refrigerant was present. If not, exclude "Refrigerants"
+    has_ref = any(k in input_keys for k in ["ref_R410A", "ref_R32", "ref_R134a"])
+    if not has_ref: excluded_labels.append(T['ex_ref'])
+        
+    if "electricity_fr" not in input_keys: excluded_labels.append(T['ex_elec'])
+    if "district_heat" not in input_keys: excluded_labels.append(T['ex_heat'])
+    if "grey_fleet_avg" not in input_keys: excluded_labels.append(T['ex_grey'])
+    if "flight_avg" not in input_keys: excluded_labels.append(T['ex_flight'])
+    if "hotel_night_avg" not in input_keys: excluded_labels.append(T['ex_hotel'])
+
+    if excluded_labels:
+        # Create HTML list items with indentation
+        exclusion_html = ""
+        for label in excluded_labels:
+            exclusion_html += f"<br/>&nbsp;&nbsp;• {label}"
+        
+        disc_excl_text = f"{T['disc_p3_intro']}{exclusion_html}"
     else:
         disc_excl_text = T['disc_p3_none']
 
-    # The 5 Bullet Points
     bullet_style = ParagraphStyle('Bullet', parent=styles['Normal'], fontSize=7, leading=9, leftIndent=10, bulletIndent=0)
     
     closing_elements.append(Paragraph(T['disc_p1'], bullet_style, bulletText='•'))
@@ -487,6 +552,8 @@ FACTORS = {
     "electricity_fr": Factor("electricity_fr", 0.052, "kgCO2e/kWh", "ADEME", "ELEC-FR"),
     "district_heat": Factor("district_heat", 0.170, "kgCO2e/kWh", "ADEME", "HEAT-NET"),
     "grey_fleet_avg": Factor("grey_fleet_avg", 0.218, "kgCO2e/km", "ADEME", "TRAVEL-CAR-AVG"),
+    "flight_avg": Factor("flight_avg", 0.14, "kgCO2e/km", "ADEME", "FLIGHT-AVG"),
+    "hotel_night_avg": Factor("hotel_night_avg", 6.9, "kgCO2e/night", "ADEME", "HOTEL-FR-AVG")
 }
 
 if "lang" not in st.session_state: st.session_state.lang = "fr"
@@ -552,7 +619,11 @@ elif st.session_state.step == 2:
     st.divider()
     st.subheader(T["s3_header"])
     st.caption(T["s3_desc"])
-    grey_km = st.number_input(T["grey_label"], min_value=0.0, format="%.2f")
+    
+    c11, c12, c13 = st.columns(3)
+    with c11: grey_km = st.number_input(T["grey_label"], min_value=0.0, format="%.2f")
+    with c12: flight_km = st.number_input(T["flight_label"], min_value=0.0, format="%.2f")
+    with c13: hotel_nights = st.number_input(T["hotel_label"], min_value=0.0, format="%.0f")
 
     st.divider()
     files = st.file_uploader(T["upload_label"], accept_multiple_files=True)
@@ -574,6 +645,8 @@ elif st.session_state.step == 2:
                 "electricity_fr": ActivityInput("electricity_fr", elec, "kWh", "Scope 2 - Energy"),
                 "district_heat": ActivityInput("district_heat", heat, "kWh", "Scope 2 - Energy"),
                 "grey_fleet_avg": ActivityInput("grey_fleet_avg", grey_km, "km", "Scope 3 - Business Travel"),
+                "flight_avg": ActivityInput("flight_avg", flight_km, "km", "Scope 3 - Business Travel"),
+                "hotel_night_avg": ActivityInput("hotel_night_avg", hotel_nights, "night", "Scope 3 - Business Travel"),
             }
             active_keys = [k for k, v in inputs.items() if v.quantity > 0]
             df = calculate_emissions(inputs, FACTORS, st.session_state.lang)
